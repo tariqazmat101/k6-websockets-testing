@@ -1,77 +1,131 @@
-import ws from 'k6/ws';
-import { sleep, check } from 'k6';
-
-export let options = {
-    vus: 1, // 50 virtual users
-    duration: '10s', // for 1 minute
-};
+import { WebSocket } from 'k6/experimental/websockets';
+import { check } from 'k6';
+class Writer {
+    constructor(littleEndian) {
+        this.writer = true;
+        this.tmpBuf = new DataView(new ArrayBuffer(8));
+        this._e = littleEndian;
+        this.reset();
+        return this;
+    }
+    reset(littleEndian = this._e) {
+        this._e = littleEndian;
+        this._b = [];
+        this._o = 0;
+    }
+    setUint8(a) {
+        if (a >= 0 && a < 256) this._b.push(a);
+        return this;
+    }
+    setInt8(a) {
+        if (a >= -128 && a < 128) this._b.push(a);
+        return this;
+    }
+    setUint16(a) {
+        this.tmpBuf.setUint16(0, a, this._e);
+        this._move(2);
+        return this;
+    }
+    setInt16(a) {
+        this.tmpBuf.setInt16(0, a, this._e);
+        this._move(2);
+        return this;
+    }
+    setUint32(a) {
+        this.tmpBuf.setUint32(0, a, this._e);
+        this._move(4);
+        return this;
+    }
+    setInt32(a) {
+        this.tmpBuf.setInt32(0, a, this._e);
+        this._move(4);
+        return this;
+    }
+    setFloat32(a) {
+        this.tmpBuf.setFloat32(0, a, this._e);
+        this._move(4);
+        return this;
+    }
+    setFloat64(a) {
+        this.tmpBuf.setFloat64(0, a, this._e);
+        this._move(8);
+        return this;
+    }
+    _move(b) {
+        for (let i = 0; i < b; i++) this._b.push(this.tmpBuf.getUint8(i));
+    }
+    setStringUTF8(s) {
+        const bytesStr = unescape(encodeURIComponent(s));
+        for (let i = 0, l = bytesStr.length; i < l; i++)
+            this._b.push(bytesStr.charCodeAt(i));
+        this._b.push(0);
+        return this;
+    }
+    build() {
+        return new Uint8Array(this._b);
+    }
+}
+// Define the binary data to be sent
 const SEND_254 = new Uint8Array([254, 6, 0, 0, 0]);
 const SEND_255 = new Uint8Array([255, 1, 0, 0, 0]);
-function nextState(currentState) {
-    // Define transition probabilities
-    const transitions = {
-        idle: { sendText: 0.3, sendBinary: 0.2, idle: 0.5 },
-        sendText: { idle: 0.7, sendBinary: 0.2, sendText: 0.1 },
-        sendBinary: { idle: 0.6, sendText: 0.3, sendBinary: 0.1 },
-    };
+const newUNT = new Uint8Array([254]);
 
-    const rand = Math.random();
-    let cumulative = 0;
-
-    for (const [state, probability] of Object.entries(transitions[currentState])) {
-        cumulative += probability;
-        if (rand < cumulative) {
-            return state;
-        }
+export default function() {
+    for (let i = 0; i < 500; i++) {
+        startWSWorker(i);
     }
 
-    return currentState; // Fallback to current state if no transition occurs
+    const params = {}; // Use this object to specify additional parameters, such as headers
+
+    // Create a new WebSocket connection
+    function startWSWorker(id) {
+        const url = 'ws://localhost:8443'; // WebSocket server URL
+        const ws = new WebSocket(url);
+
+        // Wait for the connection to open
+        ws.addEventListener('open', () => {
+            console.log('Connection opened');
+
+            // Send the binary messages
+            ws.send(SEND_254.buffer);
+            ws.send(SEND_255.buffer);
+            ws.send(newUNT.buffer);
+
+           sendPlay("tariq", "null",ws);
+           sendMouseMove(12,12,ws);
+
+        });
+        // Optionally, handle messages from the server
+        ws.addEventListener('message', (data) => {
+
+            console.log(`Received message: ${JSON.stringify(data)}`);
+        });
+
+        // Handle any errors
+        ws.addEventListener('error', (e) => {
+            console.error(`WebSocket error: ${e.error()}`);
+        });
+    }
 }
 
-export default function () {
-    //const url = 'ws://localhost:8443';
-    const url = 'ws://172.17.0.1:8443';
-    let currentState = 'idle'; // Initial state
-
-    ws.connect(url, null, function (socket) {
-        socket.on('open', function open() {
-            console.log(`WebSocket connection established by VU ${__VU}`);
-
-            for (let i = 0; i < 60; i++) { // Assuming 1 minute test, with actions every second
-                currentState = nextState(currentState); // Determine the next state
-
-                if (currentState === 'sendText') {
-                    const buffer = new ArrayBuffer(1);
-                    new Uint8Array(buffer)[0] = 254;
-                    socket.sendBinary(buffer);
-                    console.log(`VU ${__VU} sent binary data: 254`);
-                } else if (currentState === 'sendBinary') {
-                    const buffer = new ArrayBuffer(1);
-                    new Uint8Array(buffer)[0] = 254;
-                    socket.sendBinary(buffer);
-                    console.log(`VU ${__VU} sent binary data: 254`);
-                } else {
-                    const buffer = new ArrayBuffer(1);
-                    new Uint8Array(buffer)[0] = 254;
-                    socket.sendBinary(buffer);
-                    console.log(`VU ${__VU} sent binary data: 254`);
-                }
-
-                sleep(1); // Wait for 1 second before the next state transition
-            }
-
-            socket.close();
-        });
-
-        socket.on('message', function (message) {
-            // Optionally handle incoming messages
-            console.log(message);
-        });
-
-        socket.on('close', function () {
-            console.log(`WebSocket closed by VU ${__VU}`);
-        });
-
-        check(socket, { 'WebSocket opened successfully': (s) => s.readyState === s.OPEN });
-    });
-}
+    // Close the connection after a specified time
+    // Adjust the timing as per your test case
+//     setTimeout(() => {
+//         ws.close();
+//     }, 10000); // Closes the connection after 10 seconds
+//
+    function sendMouseMove(x, y, ws) {
+        const writer = new Writer(true);
+        writer.setUint8(0x10);
+        writer.setUint32(x);
+        writer.setUint32(y);
+        writer._b.push(0, 0, 0, 0);
+        ws.send(writer.build().buffer);
+    }
+    function sendPlay(name, skin,ws) {
+        const writer = new Writer(true);
+        writer.setUint8(0x00); // Packet ID for play
+        writer.setStringUTF8(name); // Send name
+        writer.setStringUTF8(skin); // Send skin
+        ws.send(writer.build().buffer);
+    }
